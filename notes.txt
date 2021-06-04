@@ -1,0 +1,4 @@
+Managed to get receiver running.
+
+Want a sender program to send packets with increasing sequence numbers, so we
+can keep track of which ones get delivered and which ones get dropped.

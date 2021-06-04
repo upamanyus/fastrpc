@@ -35,20 +35,22 @@ volatile struct {
 } ctr;
 
 void start_receiving(struct nm_desc *nmd) {
-    int k = 0;
     while (true) {
+        // Repeatedly checks the RX ring
         if (ioctl(nmd->fd, NIOCRXSYNC, NULL) < 0) {
             fprintf(stderr, "ioctl error on queue %d: %s", 37,
               strerror(errno));
             goto quit;
         }
 
-        for (int j = nmd->first_rx_ring; j <= nmd->last_rx_ring; j++) {
+        int j;
+        for (j = nmd->first_rx_ring; j <= nmd->last_rx_ring; j++) {
             struct netmap_ring *ring = NETMAP_RXRING(nmd->nifp, j);
             if (nm_ring_empty(ring))
                 continue;
 
             int limit = nm_ring_space(ring);
+            // printf("%d packets in ring, ", limit);
 
             unsigned int head;
             int i;
@@ -61,10 +63,13 @@ void start_receiving(struct nm_desc *nmd) {
 
             ring->cur = ring->head = head;
         }
-        if (k % 1000000 == 0) {
-            // printf("Saw %ld packets and %ld bytes so far\n", ctr.pkts, ctr.bytes);
-        }
-        k++;
+
+        struct timespec delta;
+        delta.tv_sec = 0;
+        delta.tv_nsec = 5000; // XXX: 5 us delay before we recheck the RX queue.
+        // Even doing 0 delay works, probably because of minimum granularity of
+        // sleep
+        nanosleep(&delta, NULL);
     }
     quit:
     return;
