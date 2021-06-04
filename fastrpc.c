@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <time.h>
+#include <locale.h>
+#include <pthread.h>
 
 #define NETMAP_WITH_LIBS
 #include "net/netmap_user.h"
@@ -26,9 +29,9 @@ struct nm_desc* setup_server(const char *host) {
     return nmd;
 }
 
-struct {
-    uint64_t pkts;
-    uint64_t bytes;
+volatile struct {
+    volatile uint64_t pkts;
+    volatile uint64_t bytes;
 } ctr;
 
 void start_receiving(struct nm_desc *nmd) {
@@ -59,7 +62,7 @@ void start_receiving(struct nm_desc *nmd) {
             ring->cur = ring->head = head;
         }
         if (k % 1000000 == 0) {
-            printf("Saw %ld packets and %ld bytes so far\n", ctr.pkts, ctr.bytes);
+            // printf("Saw %ld packets and %ld bytes so far\n", ctr.pkts, ctr.bytes);
         }
         k++;
     }
@@ -67,7 +70,44 @@ void start_receiving(struct nm_desc *nmd) {
     return;
 }
 
-void reporting_thread() {
+void timespec_diff(struct timespec *start, struct timespec *end,
+                   struct timespec *result)
+{
+    if ((end->tv_nsec - start->tv_nsec) < 0) {
+        result->tv_sec = end->tv_sec - start->tv_sec - 1;
+        result->tv_nsec = end->tv_nsec - start->tv_nsec + 1e9;
+    } else {
+        result->tv_sec = end->tv_sec - start->tv_sec;
+        result->tv_nsec = end->tv_nsec - start->tv_nsec;
+    }
+
+    return;
+}
+
+void *reporting_thread(void *garbage) {
+    garbage = garbage;
+    printf("Starting reporting thread\n");
+    struct timespec delta, start, end;
+    int report_interval = 1000; // in ms
+
+    const int ONE_MIL = 1000000;
+
+    setlocale(LC_NUMERIC, "");
+    while (true) {
+
+        delta.tv_sec = report_interval / 1000;
+        delta.tv_nsec = (report_interval % 1000) * ONE_MIL;
+        clock_gettime(CLOCK_REALTIME, &start);
+        int prev_pkts = ctr.pkts;
+
+        nanosleep(&delta, NULL);
+
+        clock_gettime(CLOCK_REALTIME, &end);
+        int pkts = ctr.pkts;
+        timespec_diff(&start, &end, &delta);
+        float pps = (float)(pkts - prev_pkts)/((float)delta.tv_sec + delta.tv_nsec/1e9);
+        printf("%'d packets per sec\n", (int)pps);
+    }
 }
 
 void usage() {
@@ -81,5 +121,9 @@ int main(int argc, char **argv) {
     }
     struct nm_desc *nmd = setup_server(argv[1]);
 
+    pthread_t tid;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_create(&tid, &attr, reporting_thread, NULL);
     start_receiving(nmd);
 }
