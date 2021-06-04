@@ -7,6 +7,10 @@
 #include <time.h>
 #include <locale.h>
 #include <pthread.h>
+#include <netinet/udp.h>
+#include <netinet/ip.h>
+#include <netinet/if_ether.h>
+#include <arpa/inet.h> // htons
 
 #define NETMAP_WITH_LIBS
 #include "net/netmap_user.h"
@@ -34,6 +38,42 @@ volatile struct {
     volatile uint64_t bytes;
 } ctr;
 
+
+int last_seq_seen = 0;
+
+void proc_pkt(const char *pkt) {
+    struct ether_header *ehdr = (struct ether_header*)pkt;
+    if (ntohs(ehdr->ether_type) != ETHERTYPE_IP) {
+        printf("unexpected ether_type: %d\n", ntohs(ehdr->ether_type));
+        return;
+    }
+
+    struct ip* iph = (struct ip *)(ehdr + 1);
+    if (iph->ip_p != IPPROTO_UDP) {
+        printf("got non-udp IP traffic\n");
+        return;
+    }
+
+    struct udphdr *uhdr = (struct udphdr*)(iph + 1);
+    int len = ntohs((int)uhdr->len);
+
+    const char *data = (const char*)(uhdr + 1);
+
+    int seq = *((int*)data);
+    printf("src port: %d, dst port: %d, len: %d seq: %d\n", ntohs(uhdr->source), ntohs(uhdr->dest), len, seq);
+    // printf("src port: %d, dst port: %d, len: %d seq: %d\n", ntohs(uhdr->source), ntohs(uhdr->dest), len, seq);
+    printf("src ip: %s, dst ip: %s\n", inet_ntoa(iph->ip_src), inet_ntoa(iph->ip_dst));
+    for(size_t i = 0; i < sizeof ehdr->ether_dhost; i++)
+    {
+        if(i > 0)
+            printf(":%02x", (unsigned int) ehdr->ether_dhost[i] & 0xffu);
+        else
+            printf("%02x", (unsigned int) ehdr->ether_dhost[i] & 0xffu);
+    }
+    printf("\n");
+    printf("\n");
+}
+
 void start_receiving(struct nm_desc *nmd) {
     while (true) {
         // Repeatedly checks the RX ring
@@ -57,6 +97,8 @@ void start_receiving(struct nm_desc *nmd) {
             for (head = ring->head, i = 0; i < limit; i++) {
                 struct netmap_slot *slot = &ring->slot[head];
                 ctr.bytes += slot->len;
+                char *rxbuf = NETMAP_BUF(ring, slot->buf_idx);
+                proc_pkt(rxbuf);
                 head = nm_ring_next(ring, head);
                 ctr.pkts++;
             }
